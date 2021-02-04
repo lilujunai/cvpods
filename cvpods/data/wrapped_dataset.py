@@ -20,6 +20,11 @@ class ConcatDataset(_ConcatDataset):
 
     def __init__(self, datasets):
         super(ConcatDataset, self).__init__(datasets)
+
+        def _serialize(data):
+            buffer = pickle.dumps(data, protocol=-1)
+            return np.frombuffer(buffer, dtype=np.uint8)
+
         if hasattr(self.datasets[0], 'aspect_ratios'):
             aspect_ratios = [d.aspect_ratios for d in self.datasets]
             self.aspect_ratios = np.concatenate(aspect_ratios)
@@ -28,6 +33,36 @@ class ConcatDataset(_ConcatDataset):
             for d in self.datasets:
                 self.meta.update(d.meta)
             self.meta = SimpleNamespace(**self.meta)
+
+    if self._serialize:
+            logger = logging.getLogger(__name__)
+            logger.info(
+                "Serializing {} elements to byte tensors and concatenating them all ...".format(
+                    len(self._lst)
+                )
+            )
+            self._lst = [_serialize(x) for x in self._lst]
+            self._addr = np.asarray([len(x) for x in self._lst], dtype=np.int64)
+            self._addr = np.cumsum(self._addr)
+            self._lst = np.concatenate(self._lst)
+            logger.info("Serialized dataset takes {:.2f} MiB".format(len(self._lst) / 1024 ** 2))
+
+    def __len__(self):
+        if self._serialize:
+            return len(self._addr)
+        else:
+            return len(self._lst)
+
+    def __getitem__(self, idx):
+        if self._serialize:
+            start_addr = 0 if idx == 0 else self._addr[idx - 1].item()
+            end_addr = self._addr[idx].item()
+            bytes = memoryview(self._lst[start_addr:end_addr])
+            return pickle.loads(bytes)
+        elif self._copy:
+            return copy.deepcopy(self._lst[idx])
+        else:
+            return self._lst[idx]
 
 
 @DATASETS.register()
